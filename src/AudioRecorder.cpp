@@ -1,5 +1,13 @@
 #include "AudioRecorder.h"
 #include "driver/i2s.h"
+#include <cmath>
+
+namespace {
+// 35 Hz high-pass removes handling rumble; two 1200 Hz low-pass stages
+// attenuate hiss while retaining much of the lung-sound band at 16 kHz.
+constexpr float kHighPassPole = 0.98635f; // exp(-2*pi*35/16000)
+constexpr float kLowPassGain = 0.3759f;   // 1-exp(-2*pi*1200/16000)
+}
 
 bool AudioRecorder::begin() {
   i2s_config_t config = {
@@ -57,11 +65,22 @@ bool AudioRecorder::record(File &file, uint32_t seconds) {
   if (target + 44 > kMaxWavBytes || !WavWriter::header(file, 0)) return false;
   // Discard stale DMA samples accumulated while idle; conversion is unchanged.
   i2s_zero_dma_buffer(I2S_NUM_0);
+  previousInput_ = highPass_ = lowPass1_ = lowPass2_ = 0;
   uint32_t written = 0;
   int16_t pcm[kBufferSize];
   while (written < target) {
     int count = read(pcm);
     if (count <= 0) return false;
+    for (int i = 0; i < count; ++i) {
+      float input = pcm[i];
+      highPass_ = kHighPassPole * (highPass_ + input - previousInput_);
+      previousInput_ = input;
+      lowPass1_ += kLowPassGain * (highPass_ - lowPass1_);
+      lowPass2_ += kLowPassGain * (lowPass1_ - lowPass2_);
+      float output = roundf(lowPass2_);
+      pcm[i] = static_cast<int16_t>(output > 32767 ? 32767 :
+                                    output < -32768 ? -32768 : output);
+    }
     size_t bytes = min(uint32_t(count * 2), target - written);
     if (file.write((uint8_t *)pcm, bytes) != bytes) return false;
     written += bytes;

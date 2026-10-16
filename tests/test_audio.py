@@ -119,5 +119,7 @@ with tempfile.TemporaryDirectory(prefix="respicare-audio-", dir=TEMP_ROOT) as tm
         assert (reader.getnchannels(), reader.getsampwidth(), reader.getframerate(),
                 reader.getnframes()) == (1, 2, 16000, 16000)
         values = struct.unpack("<16000h", reader.readframes(16000))
-        assert values == tuple([-32768, -1, 0, 1, 32767][i % 5] for i in range(16000))
-print("PASS: original I2S settings, PCM conversion, finalized WAV, size/write/read failures")
+        assert values != tuple([-32768, -1, 0, 1, 32767][i % 5] for i in range(16000))
+        assert max(map(abs, values[100:])) < 15000  # High-frequency fixture is attenuated.
+        assert values[255] != values[256]  # Filter state continues across reads.
+print("PASS: original I2S settings, filtered PCM WAV, size/write/read failures")

@@ -17,4 +17,9 @@ class AudioRecorder {
   bool begin();
   int read(int16_t *pcm);
   bool record(File &file, uint32_t seconds);
+ private:
+  float previousInput_ = 0;
+  float highPass_ = 0;
+  float lowPass1_ = 0;
+  float lowPass2_ = 0;
 };

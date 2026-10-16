@@ -17,7 +17,8 @@ The backend, not this firmware, invokes AI and updates DB/Realtime.
 - `src/Network.*`: WiFiManager and MQTT/TLS connection, reconnect, retained
   online status, QoS 1 Last Will and event delivery.
 - `src/Protocol.*`: UUID/UTC validation and versioned JSON event envelopes.
-- `src/AudioRecorder.*`: original I2S configuration/conversion and WavWriter.
+- `src/AudioRecorder.*`: original I2S configuration/conversion, capture-time
+  high-pass/low-pass filtering and WavWriter.
 - `src/RecordingStorage.*`: replaceable LittleFS adapter, persistent accepted
   command/visit ledger, NVS checkpoint.
 - `src/RecordingApiClient.*`: HTTPS upload-url, streaming PUT and complete.
@@ -61,6 +62,12 @@ DMA 8 × 256, 16 kHz and `(int16_t)(raw >> 16)` are preserved. I2S reads now
 time out at 250 ms instead of blocking forever. WAV is little-endian RIFF PCM
 format 1, mono, 16 kHz, 16-bit; the 44-byte header is finalized after capture.
 Only fixed 256-sample buffers are used, not a recording-sized RAM allocation.
+New recordings are filtered during capture with a 35 Hz high-pass and two
+1200 Hz low-pass stages. The filter keeps state across DMA reads and resets for
+each recording. The uploaded WAV is filtered; no unfiltered copy is retained.
+This may suppress diagnostic high-frequency sounds and changes AI inputs:
+validate recordings and model performance before clinical use. It cannot
+repair physical noise or missing I2S samples. Existing stored WAVs are unchanged.
 
 ## Libraries and build prerequisites
 
