@@ -28,12 +28,26 @@ void firmwareSetup() {
     Serial.println("[SERVICE] STOP: NVS unavailable; nothing deleted");
     return;
   }
+  if (!prefs.isKey("job")) {
+    Serial.println("[SERVICE] STOP: NVS job missing; nothing changed");
+    Serial.printf("[SERVICE] WAV present: %s\n",
+                  LittleFS.exists("/recording.wav") ? "yes" : "no");
+    prefs.end();
+    return;
+  }
   String stored = prefs.getString("job", "");
   JsonDocument job;
-  if (stored.isEmpty() || deserializeJson(job, stored) ||
-      job["visit"].as<String>() != MAINTENANCE_VISIT_ID ||
-      job["phase"].as<String>() != "error") {
-    Serial.println("[SERVICE] STOP: visit/phase mismatch or no job; nothing deleted");
+  if (stored.isEmpty() || deserializeJson(job, stored)) {
+    Serial.println("[SERVICE] STOP: unreadable NVS job; nothing changed");
+    prefs.end();
+    return;
+  }
+  String visit = job["visit"].as<String>();
+  String phase = job["phase"].as<String>();
+  Serial.printf("[SERVICE] checkpoint visit=%s phase=%s\n",
+                visit.c_str(), phase.c_str());
+  if (visit != MAINTENANCE_VISIT_ID || phase != "error") {
+    Serial.println("[SERVICE] STOP: visit/phase mismatch; nothing changed");
     prefs.end();
     return;
   }
