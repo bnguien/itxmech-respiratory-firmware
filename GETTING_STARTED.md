@@ -18,7 +18,7 @@ status. A valid `ASSIGN_VISIT` immediately starts recording and uploading;
 - Obtain `respicare-mqtt-ca.crt` from the broker operator through a trusted
   channel: it is intentionally **not in Git**. Check its fingerprint with the
   operator before placing it at the repository root. HTTPS roots are embedded:
-  `src/WebApiCa.h` for the Web API and `src/WebCaBundle.h` for Storage.
+  `src/WebApiCa.h` for the Web API and `src/StorageCa.h` for Storage.
   Do not add `HTTPS_CA_FILE`.
 - Obtain the exact Supabase Storage hostname from the deployed backend's
   signed URL for `UPLOAD_HOST`. It is required at build even though this
@@ -124,8 +124,9 @@ physical flash capacity or signed-upload compatibility on the actual board.
 If the device stops after `[API] requesting upload URL` with
 `esp_crt_verify_callback(): Failed to verify certificate`, the previous
 Web API connection used only the public CA bundle. This version verifies
-the fixed Vercel Web API with Mozilla-trusted self-signed GTS Root R1 instead;
-it keeps the bundle for the signed Storage host. Rebuild and flash only after
+  the fixed Vercel Web API with Mozilla-trusted self-signed GTS Root R1 instead.
+  Signed Storage uses GTS Root R4 because its October 2026 chain has the same
+  cross-sign issue. Rebuild and flash only after
 checking current TLS certificates and the device's flash/data layout. Do not
 use `setInsecure()` or put device API credentials in TLS diagnostics.
 
@@ -163,8 +164,9 @@ Remove-Item Env:MAINTENANCE_VISIT_ID
 Remove-Item Env:MAINTENANCE_CONFIRM
 Remove-Item Env:AUDIO_SERIAL_DEBUG -ErrorAction SilentlyContinue
 Get-Content .env | ForEach-Object {
-    if ($_ -match '^export ([A-Z][A-Z0-9_]*)=''([^'']*)''$') {
-        [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+    if ($_ -match '^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)=(.*)$') {
+        $value = $matches[2].Trim().Trim([char[]]@([char]39, [char]34))
+        [Environment]::SetEnvironmentVariable($matches[1], $value, 'Process')
     }
 }
 pio run -e esp32dev -t clean
@@ -176,3 +178,32 @@ Confirm `[MQTT] DEVICE_ONLINE retained QoS1` with **no** `[FLOW] restoring
 checkpoint` and **no** `[SERVICE]` output. Then create an entirely **new**
 in-progress backend visit and publish a new `ASSIGN_VISIT` with a new UUID
 `messageId`. Never reuse the discarded visit ID (the dedup ledger retains it).
+
+## 8. Recover a WAV after a failed Storage TLS PUT (do not re-record)
+
+Use only when the backend operator confirms the visit is still valid and its
+recording is **not uploaded** (waiting/failed). Do not use this mode if complete
+may already have been accepted; coordinate with the backend first. The actual
+visit ID from the failed recording is required; do **not** reuse the example
+visit ID from section 7. Confirm the same ESP32/COM port, that the WAV is still
+needed, and `RECORD_SECONDS` matches the original capture (20 by default).
+After `git pull`, in PowerShell:
+
+```powershell
+$env:MAINTENANCE_VISIT_ID = '<ACTUAL_FAILED_VISIT_UUID>'
+$env:MAINTENANCE_CONFIRM = 'RECOVER_FAILED_UPLOAD'
+$env:RECORD_SECONDS = '20'
+pio run -e esp32dev -t clean
+pio run -e esp32dev -t upload --upload-port COM11
+pio device monitor --port COM11 --baud 921600
+```
+
+The service firmware makes **no network request**. Only after
+`[SERVICE] DONE: failed WAV preserved; upload checkpoint restored` should you
+exit the monitor (Ctrl+C), clear both maintenance environment variables,
+load `.env` as shown above, clean/build and flash production onto the **same**
+board. Production resumes the old WAV with a *fresh* signed URL; do **not**
+send another `ASSIGN_VISIT`. Expect `[FLOW] restoring checkpoint`, then
+`[API] requesting upload URL`, `UPLOAD_STARTED`, `UPLOAD_SUCCESS` after the
+complete API returns 2xx. If service prints `STOP` (including `job NOT_FOUND`),
+do not erase flash or proceed with a new visit; inspect the actual device/job.

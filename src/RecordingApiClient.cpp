@@ -4,7 +4,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include "WebApiCa.h"
-#include "WebCaBundle.h"
+#include "StorageCa.h"
 
 namespace {
 // HTTPClient decodes chunking into this bounded sink; never buffer a WAV in RAM.
@@ -25,9 +25,9 @@ class ResponseBuffer : public Stream {
 void configure(HTTPClient &http, WiFiClientSecure &tls, bool webApi) {
   // The Vercel chain contains a cross-signed GTS root; the Arduino bundle
   // callback tries to anchor the final cross-sign instead of trusted GTS R1.
-  // Use the Mozilla-trusted GTS R1 for our fixed Web API host only.
+  // Use Mozilla-trusted self-signed roots for the two allowlisted hosts.
   if (webApi) tls.setCACert(kWebApiCa);
-  else tls.setCACertBundle(kWebCaBundle);  // Signed Supabase Storage host.
+  else tls.setCACert(kStorageCa);  // Signed Supabase Storage host (GTS R4).
   tls.setHandshakeTimeout(15);
   http.setConnectTimeout(15000);
   // Backend complete can wait for AI; a timeout is retried idempotently.

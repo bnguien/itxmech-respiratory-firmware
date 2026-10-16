@@ -21,8 +21,10 @@ The backend, not this firmware, invokes AI and updates DB/Realtime.
 - `src/RecordingStorage.*`: replaceable LittleFS adapter, persistent accepted
   command/visit ledger, NVS checkpoint.
 - `src/RecordingApiClient.*`: HTTPS upload-url, streaming PUT and complete.
-- `src/WebCaBundle.h`: embedded public Mozilla roots for signed Storage PUT.
+- `src/StorageCa.h`: Mozilla-trusted GTS Root R4 PEM for signed Storage PUT.
 - `src/WebApiCa.h`: Mozilla-trusted GTS Root R1 PEM for the Web Device API.
+- `src/WebCaBundle.h`: retained public Mozilla bundle; neither current HTTPS
+  host uses it while their chains include the unsupported cross-sign.
 - `src/DeviceFlow.*`: recording/upload state machine and bounded retry.
 - `scripts/build_config.py`, private `.env`: build-injected runtime configuration.
 - `platformio.ini`: pinned Arduino ESP32 build, default 4 MB partition table.
@@ -101,21 +103,22 @@ against physical extraction.
 
 Confirm `respicare-mqtt-ca.crt` with the broker operator over a trusted channel.
 The build script embeds it from the repository root for **MQTT only**. HTTPS
-uses `src/WebCaBundle.h`, a compact bundle of 121 public Mozilla CA roots
-generated from certifi's Mozilla trust store (2026.7.22) for Arduino ESP32
-2.0.17 `setCACertBundle()`. Source `cacert.pem` SHA-256:
+uses two Mozilla-trusted public roots from certifi 2026.7.22, embedded as PEM
+for `setCACert()`. `src/WebCaBundle.h` retains a packed bundle of 121 roots,
+but the current cross-signed Vercel/Supabase chains cannot use its callback.
+Source `cacert.pem` SHA-256:
 `9cc2a774b5198dcff14d9be1e66091f538975d867ce029a96bce15a55dfd730f`.
 Mozilla root data is licensed under MPL 2.0. To rotate roots, verify a trusted Mozilla PEM
 bundle and run `python3 scripts/generate_web_ca_bundle.py /trusted/roots.pem`;
 OpenSSL is needed only to regenerate the public header, not at build/runtime.
-Confirm the actual Vercel and Supabase HTTPS chains anchor in this bundle on
-hardware before testing upload. Plan CA rotation before expiry.
+Confirm the actual Vercel and Supabase HTTPS chains on hardware before upload.
+Plan CA rotation when provider chains or trust roots change.
 
-MQTT uses its private CA; the fixed Vercel Web API uses `setCACert` with
-Mozilla-trusted GTS Root R1, while signed Storage PUT uses `setCACertBundle`.
-The Vercel chain in October 2026 includes a cross-signed GTS Root R1 whose
-GlobalSign issuer is not in the bundled Mozilla roots; explicit GTS R1 lets
-the regular mbedTLS verifier anchor the chain to the trusted GTS root.
+MQTT uses its private CA; Web API uses self-signed GTS Root R1 and the
+allowlisted signed Storage host uses self-signed GTS Root R4. Both October
+2026 server chains include cross-signed GTS roots with a GlobalSign issuer
+not present in the packed Mozilla bundle. Regular mbedTLS verification can
+anchor to the trusted self-signed roots instead.
 All HTTPS connections still verify hostnames and
 wait for an SNTP **response on this boot** before TLS connects. A plausible
 RTC clock alone is insufficient. No insecure fallback exists. HTTPS redirects

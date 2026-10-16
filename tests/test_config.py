@@ -11,6 +11,7 @@ from unittest.mock import patch
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/build_config.py"
 BUNDLE = SCRIPT.parents[1] / "src/WebCaBundle.h"
 WEB_API_CA = SCRIPT.parents[1] / "src/WebApiCa.h"
+STORAGE_CA = SCRIPT.parents[1] / "src/StorageCa.h"
 
 
 class FakeEnvironment:
@@ -102,6 +103,20 @@ class ConfigTest(unittest.TestCase):
         self.assertNotIn("MQTT_PASSWORD", header)
         self.assertEqual(self.env.filter, ["+<code_esp.ino.cpp>", "+<src/Maintenance.cpp>"])
 
+    def test_recovery_compiles_storage_without_credentials(self):
+        self.run_hook({
+            "MAINTENANCE_VISIT_ID": "a15291c8-d10a-4bde-b8ff-92bd70dbe44d",
+            "MAINTENANCE_CONFIRM": "RECOVER_FAILED_UPLOAD",
+            "RECORD_SECONDS": "20",
+        })
+        header = (self.root / "include/BuildConfig.h").read_text()
+        self.assertIn("#define MAINTENANCE_RECOVER 1", header)
+        self.assertIn("#define RECORD_SECONDS 20", header)
+        self.assertNotIn("MQTT_PASSWORD", header)
+        self.assertEqual(self.env.filter, ["+<code_esp.ino.cpp>",
+                                           "+<src/Maintenance.cpp>",
+                                           "+<src/RecordingStorage.cpp>"])
+
     def test_web_ca_bundle_is_sorted_and_complete(self):
         blob = bytes(int(value, 16) for value in re.findall(
             r"0x([0-9a-f]{2})", BUNDLE.read_text()))
@@ -127,6 +142,16 @@ class ConfigTest(unittest.TestCase):
             input=pem, text=True, capture_output=True, check=True).stdout
         self.assertIn("CN=GTS Root R1", result)
         self.assertIn("D9:47:43:2A:BD:E7:B7:FA:90:FC:2E:6B:59:10:1B:12:", result)
+        self.assertEqual(result.splitlines()[0].replace("subject=", ""),
+                         result.splitlines()[1].replace("issuer=", ""))
+
+    def test_storage_root_is_verified_public_gts_root(self):
+        pem = STORAGE_CA.read_text().split('R"CERT(', 1)[1].split(')CERT"', 1)[0]
+        result = subprocess.run(
+            ["openssl", "x509", "-noout", "-subject", "-issuer", "-fingerprint", "-sha256"],
+            input=pem, text=True, capture_output=True, check=True).stdout
+        self.assertIn("CN=GTS Root R4", result)
+        self.assertIn("34:9D:FA:40:58:C5:E2:63:12:3B:39:8A:E7:95:57:3C:", result)
         self.assertEqual(result.splitlines()[0].replace("subject=", ""),
                          result.splitlines()[1].replace("issuer=", ""))
 

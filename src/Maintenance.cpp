@@ -4,6 +4,10 @@
 #include <BuildConfig.h>
 #include <LittleFS.h>
 #include <Preferences.h>
+#if MAINTENANCE_RECOVER
+#include "RecordingStorage.h"
+#include "AudioRecorder.h"
+#endif
 
 #ifndef MAINTENANCE_VISIT_ID
 #error "Maintenance must only be built for an explicitly selected visit"
@@ -38,6 +42,28 @@ void firmwareSetup() {
     prefs.end();
     return;
   }
+#if MAINTENANCE_RECOVER
+  RecordingStorage storage;
+  if (job["recording"].as<String>().length() != 36 ||
+      !storage.validRecording(RECORD_SECONDS * kSampleRate * 2)) {
+    Serial.println("[SERVICE] STOP: backend ID/WAV invalid; checkpoint untouched");
+    prefs.end();
+    return;
+  }
+  // The failed PUT happened after the backend recording ID was checkpointed.
+  // Resume with a fresh signed URL; never capture audio a second time.
+  job["phase"] = "uploading";
+  String updated;
+  serializeJson(job, updated);
+  if (prefs.putString("job", updated) != updated.length()) {
+    Serial.println("[SERVICE] STOP: checkpoint write failed; WAV retained");
+    prefs.end();
+    return;
+  }
+  prefs.end();
+  Serial.println("[SERVICE] DONE: failed WAV preserved; upload checkpoint restored");
+  Serial.println("[SERVICE] flash production firmware to resume this visit");
+#else
   if (!LittleFS.remove("/recording.wav")) {
     Serial.println("[SERVICE] STOP: WAV deletion failed; checkpoint left untouched");
     prefs.end();
@@ -51,6 +77,7 @@ void firmwareSetup() {
   prefs.end();
   Serial.println("[SERVICE] DONE: failed WAV/job removed; accepted.log preserved");
   Serial.println("[SERVICE] flash production firmware before assigning new visit");
+#endif
 }
 
 void firmwareLoop() { delay(1000); }

@@ -25,17 +25,26 @@ def certificate(path):
 maintenance = os.environ.get("MAINTENANCE_VISIT_ID", "")
 debug = os.environ.get("AUDIO_SERIAL_DEBUG", "0") == "1"
 if maintenance:
-    if os.environ.get("MAINTENANCE_CONFIRM") != "DISCARD_FAILED_WAV":
-        raise RuntimeError("MAINTENANCE_CONFIRM=DISCARD_FAILED_WAV is required")
+    action = os.environ.get("MAINTENANCE_CONFIRM")
+    if action not in ("DISCARD_FAILED_WAV", "RECOVER_FAILED_UPLOAD"):
+        raise RuntimeError("MAINTENANCE_CONFIRM must explicitly select discard or recovery")
     if not re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", maintenance):
         raise RuntimeError("MAINTENANCE_VISIT_ID must be a lowercase UUID")
-    env.Replace(SRC_FILTER=["+<code_esp.ino.cpp>", "+<src/Maintenance.cpp>"])
+    sources = ["+<code_esp.ino.cpp>", "+<src/Maintenance.cpp>"]
+    if action == "RECOVER_FAILED_UPLOAD":
+        sources.append("+<src/RecordingStorage.cpp>")
+    env.Replace(SRC_FILTER=sources)
 elif debug:
     env.Replace(SRC_FILTER=["+<code_esp.ino.cpp>", "+<src/Firmware.cpp>",
                             "+<src/AudioRecorder.cpp>"])
 values = {"AUDIO_SERIAL_DEBUG": int(debug)}
 if maintenance:
     values["MAINTENANCE_VISIT_ID"] = maintenance
+    values["MAINTENANCE_RECOVER"] = int(action == "RECOVER_FAILED_UPLOAD")
+    if action == "RECOVER_FAILED_UPLOAD":
+        values["RECORD_SECONDS"] = int(os.environ.get("RECORD_SECONDS", "20"))
+        if not 1 <= values["RECORD_SECONDS"] <= 1638:
+            raise RuntimeError("RECORD_SECONDS must fit the 50 MiB WAV limit")
 elif not debug:
     for key in ("WIFI_SSID", "WIFI_PASSWORD", "DEVICE_ID", "MQTT_HOST",
                 "MQTT_USERNAME", "MQTT_PASSWORD", "WEB_BASE_URL",
