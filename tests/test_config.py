@@ -3,12 +3,14 @@ import os
 from pathlib import Path
 import re
 import runpy
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/build_config.py"
 BUNDLE = SCRIPT.parents[1] / "src/WebCaBundle.h"
+WEB_API_CA = SCRIPT.parents[1] / "src/WebApiCa.h"
 
 
 class FakeEnvironment:
@@ -103,6 +105,16 @@ class ConfigTest(unittest.TestCase):
             previous = name
             offset += 4 + name_size + key_size
         self.assertEqual(offset, len(blob))
+
+    def test_web_api_root_is_verified_public_gts_root(self):
+        pem = WEB_API_CA.read_text().split('R"CERT(', 1)[1].split(')CERT"', 1)[0]
+        result = subprocess.run(
+            ["openssl", "x509", "-noout", "-subject", "-issuer", "-fingerprint", "-sha256"],
+            input=pem, text=True, capture_output=True, check=True).stdout
+        self.assertIn("CN=GTS Root R1", result)
+        self.assertIn("D9:47:43:2A:BD:E7:B7:FA:90:FC:2E:6B:59:10:1B:12:", result)
+        self.assertEqual(result.splitlines()[0].replace("subject=", ""),
+                         result.splitlines()[1].replace("issuer=", ""))
 
 
 if __name__ == "__main__":

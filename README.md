@@ -1,5 +1,9 @@
 # RespiCare lung-sound firmware
 
+**New clone / first hardware test:** follow [GETTING_STARTED.md](GETTING_STARTED.md)
+before building or flashing. Do not use an existing device's flash as a test
+partition without confirming whether it holds data.
+
 Production flow: Dashboard → Web Backend → MQTT Gateway → Mosquitto → ESP32
 → local WAV → Web Device API → signed Storage PUT → complete API.
 The backend, not this firmware, invokes AI and updates DB/Realtime.
@@ -17,8 +21,8 @@ The backend, not this firmware, invokes AI and updates DB/Realtime.
 - `src/RecordingStorage.*`: replaceable LittleFS adapter, persistent accepted
   command/visit ledger, NVS checkpoint.
 - `src/RecordingApiClient.*`: HTTPS upload-url, streaming PUT and complete.
-- `src/WebCaBundle.h`: embedded public Mozilla roots in the Arduino ESP32
-  certificate-bundle format (no certificate paths on the device).
+- `src/WebCaBundle.h`: embedded public Mozilla roots for signed Storage PUT.
+- `src/WebApiCa.h`: Mozilla-trusted GTS Root R1 PEM for the Web Device API.
 - `src/DeviceFlow.*`: recording/upload state machine and bounded retry.
 - `scripts/build_config.py`, private `.env`: build-injected runtime configuration.
 - `platformio.ini`: pinned Arduino ESP32 build, default 4 MB partition table.
@@ -107,7 +111,12 @@ OpenSSL is needed only to regenerate the public header, not at build/runtime.
 Confirm the actual Vercel and Supabase HTTPS chains anchor in this bundle on
 hardware before testing upload. Plan CA rotation before expiry.
 
-MQTT uses `setCACert`, HTTPS uses `setCACertBundle`; both verify hostnames and
+MQTT uses its private CA; the fixed Vercel Web API uses `setCACert` with
+Mozilla-trusted GTS Root R1, while signed Storage PUT uses `setCACertBundle`.
+The Vercel chain in October 2026 includes a cross-signed GTS Root R1 whose
+GlobalSign issuer is not in the bundled Mozilla roots; explicit GTS R1 lets
+the regular mbedTLS verifier anchor the chain to the trusted GTS root.
+All HTTPS connections still verify hostnames and
 wait for an SNTP **response on this boot** before TLS connects. A plausible
 RTC clock alone is insufficient. No insecure fallback exists. HTTPS redirects
 are disabled.

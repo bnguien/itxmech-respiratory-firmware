@@ -3,6 +3,7 @@
 #include <BuildConfig.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include "WebApiCa.h"
 #include "WebCaBundle.h"
 
 namespace {
@@ -21,8 +22,12 @@ class ResponseBuffer : public Stream {
   void flush() override {}
 };
 
-void configure(HTTPClient &http, WiFiClientSecure &tls) {
-  tls.setCACertBundle(kWebCaBundle);
+void configure(HTTPClient &http, WiFiClientSecure &tls, bool webApi) {
+  // The Vercel chain contains a cross-signed GTS root; the Arduino bundle
+  // callback tries to anchor the final cross-sign instead of trusted GTS R1.
+  // Use the Mozilla-trusted GTS R1 for our fixed Web API host only.
+  if (webApi) tls.setCACert(kWebApiCa);
+  else tls.setCACertBundle(kWebCaBundle);  // Signed Supabase Storage host.
   tls.setHandshakeTimeout(15);
   http.setConnectTimeout(15000);
   // Backend complete can wait for AI; a timeout is retried idempotently.
@@ -39,7 +44,7 @@ bool allowedUploadUrl(const String &url) {
 int RecordingApiClient::requestUrl(RecordingJob &job, UploadTicket &ticket) {
   WiFiClientSecure tls;
   HTTPClient http;
-  configure(http, tls);
+  configure(http, tls, true);
   String endpoint = String(WEB_BASE_URL) + "/api/device/visits/" +
                     job.visitId + "/recording/upload-url";
   if (!http.begin(tls, endpoint)) return -1;
@@ -76,7 +81,7 @@ int RecordingApiClient::upload(const UploadTicket &ticket, File &file) {
   if (!file || file.size() < 44 || file.size() > 50UL * 1024 * 1024) return 413;
   WiFiClientSecure tls;
   HTTPClient http;
-  configure(http, tls);
+  configure(http, tls, false);
   if (!allowedUploadUrl(ticket.url) || !http.begin(tls, ticket.url)) return -1;
   http.addHeader("Content-Type", "audio/wav");
   // Deliberately do not attach the device API key to the Storage host.
@@ -89,7 +94,7 @@ int RecordingApiClient::upload(const UploadTicket &ticket, File &file) {
 int RecordingApiClient::complete(const RecordingJob &job) {
   WiFiClientSecure tls;
   HTTPClient http;
-  configure(http, tls);
+  configure(http, tls, true);
   String endpoint = String(WEB_BASE_URL) + "/api/device/recordings/" +
                     job.recordingId + "/complete";
   if (!http.begin(tls, endpoint)) return -1;
