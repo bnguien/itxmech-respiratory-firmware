@@ -22,12 +22,21 @@ def certificate(path):
     return value
 
 
+maintenance = os.environ.get("MAINTENANCE_VISIT_ID", "")
 debug = os.environ.get("AUDIO_SERIAL_DEBUG", "0") == "1"
-if debug:
+if maintenance:
+    if os.environ.get("MAINTENANCE_CONFIRM") != "DISCARD_FAILED_WAV":
+        raise RuntimeError("MAINTENANCE_CONFIRM=DISCARD_FAILED_WAV is required")
+    if not re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", maintenance):
+        raise RuntimeError("MAINTENANCE_VISIT_ID must be a lowercase UUID")
+    env.Replace(SRC_FILTER=["+<code_esp.ino.cpp>", "+<src/Maintenance.cpp>"])
+elif debug:
     env.Replace(SRC_FILTER=["+<code_esp.ino.cpp>", "+<src/Firmware.cpp>",
                             "+<src/AudioRecorder.cpp>"])
 values = {"AUDIO_SERIAL_DEBUG": int(debug)}
-if not debug:
+if maintenance:
+    values["MAINTENANCE_VISIT_ID"] = maintenance
+elif not debug:
     for key in ("WIFI_SSID", "WIFI_PASSWORD", "DEVICE_ID", "MQTT_HOST",
                 "MQTT_USERNAME", "MQTT_PASSWORD", "WEB_BASE_URL",
                 "FIRMWARE_DEVICE_API_KEY", "UPLOAD_HOST"):

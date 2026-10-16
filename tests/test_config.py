@@ -88,6 +88,20 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual((self.root / "include/BuildConfig.h").read_text().count("#define"), 1)
         self.assertNotIn("+<src/Network.cpp>", self.env.filter)
 
+    def test_maintenance_requires_exact_confirmation(self):
+        with self.assertRaisesRegex(RuntimeError, "MAINTENANCE_CONFIRM"):
+            self.run_hook({"MAINTENANCE_VISIT_ID": "ad2d6b03-b921-4094-b584-d249426a0279"})
+
+    def test_maintenance_excludes_production_and_secrets(self):
+        self.run_hook({
+            "MAINTENANCE_VISIT_ID": "ad2d6b03-b921-4094-b584-d249426a0279",
+            "MAINTENANCE_CONFIRM": "DISCARD_FAILED_WAV",
+        })
+        header = (self.root / "include/BuildConfig.h").read_text()
+        self.assertIn('MAINTENANCE_VISIT_ID "ad2d6b03-b921-4094-b584-d249426a0279"', header)
+        self.assertNotIn("MQTT_PASSWORD", header)
+        self.assertEqual(self.env.filter, ["+<code_esp.ino.cpp>", "+<src/Maintenance.cpp>"])
+
     def test_web_ca_bundle_is_sorted_and_complete(self):
         blob = bytes(int(value, 16) for value in re.findall(
             r"0x([0-9a-f]{2})", BUNDLE.read_text()))

@@ -134,3 +134,45 @@ retained, and a reboot will **not** automatically retry an ERROR job. Before
 resetting any device state, preserve the WAV and coordinate recovery of the
 existing visit with the backend operator. Do not erase LittleFS/NVS, republish
 the same visit, or assume reflashing will upload that recording.
+
+## 7. One-time discard of the failed WAV (backend operator approval only)
+
+This **permanently deletes** `/recording.wav` for the selected failed job and
+clears only the `respicare` NVS `job` key; `/accepted.log` and all other NVS
+keys remain intact. Use only after the backend operator has handled the old
+visit/recording, confirmed the WAV is no longer needed, and approved the
+specific old visit ID. Verify the board/partition and serial port first.
+On Windows PowerShell, after `git pull`, with PlatformIO installed:
+
+```powershell
+$env:MAINTENANCE_VISIT_ID = 'ad2d6b03-b921-4094-b584-d249426a0279'
+$env:MAINTENANCE_CONFIRM = 'DISCARD_FAILED_WAV'
+pio run -e esp32dev -t clean
+pio run -e esp32dev -t upload --upload-port COM3
+pio device monitor --port COM3 --baud 921600
+```
+
+Replace `COM3` with the verified ESP32 port. The service firmware does **not**
+connect to Wi-Fi/MQTT. Proceed only when Serial prints `[SERVICE] DONE: failed
+WAV/job removed; accepted.log preserved`. If it prints `STOP`, do not assign
+a visit: inspect the reason instead. Exit the monitor (Ctrl+C), then restore
+production in the **same PowerShell** window:
+
+```powershell
+Remove-Item Env:MAINTENANCE_VISIT_ID
+Remove-Item Env:MAINTENANCE_CONFIRM
+Remove-Item Env:AUDIO_SERIAL_DEBUG -ErrorAction SilentlyContinue
+Get-Content .env | ForEach-Object {
+    if ($_ -match '^export ([A-Z][A-Z0-9_]*)=''([^'']*)''$') {
+        [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+    }
+}
+pio run -e esp32dev -t clean
+pio run -e esp32dev -t upload --upload-port COM3
+pio device monitor --port COM3 --baud 921600
+```
+
+Confirm `[MQTT] DEVICE_ONLINE retained QoS1` with **no** `[FLOW] restoring
+checkpoint` and **no** `[SERVICE]` output. Then create an entirely **new**
+in-progress backend visit and publish a new `ASSIGN_VISIT` with a new UUID
+`messageId`. Never reuse the discarded visit ID (the dedup ledger retains it).
