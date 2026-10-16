@@ -1,0 +1,11 @@
+.pio/
+.env
+.env.*
+!.env.example
+include/BuildConfig.h
+certs/*.key
+certs/*.pem
+certs/*.crt
+__pycache__/
+*.wav
+respicare-mqtt-ca.crt
