@@ -63,6 +63,14 @@ class ConfigTest(unittest.TestCase):
             self.run_hook(self.values)
         self.assertFalse((self.root / "include/BuildConfig.h").exists())
 
+    def test_wifi_optional_for_runtime_setup(self):
+        del self.values["WIFI_SSID"]
+        del self.values["WIFI_PASSWORD"]
+        self.run_hook(self.values)
+        header = (self.root / "include/BuildConfig.h").read_text()
+        self.assertIn('#define WIFI_SSID ""', header)
+        self.assertIn('#define WIFI_PASSWORD ""', header)
+
     def test_placeholder_wifi_fails_before_writing(self):
         self.values["WIFI_SSID"] = "REPLACE_ME"
         with self.assertRaisesRegex(RuntimeError, "WIFI_SSID"):

@@ -2,6 +2,9 @@
 #include <Arduino.h>
 #include <MQTT.h>
 #include <WiFiClientSecure.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <Preferences.h>
 
 using CommandHandler = void (*)(String &, String &);
 
@@ -14,6 +17,20 @@ class WiFiManager {
   uint32_t lastAttempt = 0;
   bool wasConnected = false;
   bool wasSynced = false;
+  WebServer portal{80};
+  DNSServer dns;
+  Preferences settings;
+  String ssid, password, pendingSsid, pendingPassword;
+  bool portalActive = false;
+  bool testing = false;
+  bool connectPending = false;
+  uint32_t disconnectedSince = 0;
+  uint32_t testStarted = 0;
+  uint32_t closePortalAt = 0;
+  String portalMessage;
+  void startPortal();
+  void stopPortal();
+  void showPortal();
 };
 
 class MqttConnection {

@@ -46,7 +46,13 @@ if maintenance:
         if not 1 <= values["RECORD_SECONDS"] <= 1638:
             raise RuntimeError("RECORD_SECONDS must fit the 50 MiB WAV limit")
 elif not debug:
-    for key in ("WIFI_SSID", "WIFI_PASSWORD", "DEVICE_ID", "MQTT_HOST",
+    values["WIFI_SSID"] = os.environ.get("WIFI_SSID", "")
+    values["WIFI_PASSWORD"] = os.environ.get("WIFI_PASSWORD", "")
+    if values["WIFI_SSID"]:
+        values["WIFI_SSID"] = required("WIFI_SSID")
+        if values["WIFI_PASSWORD"]:
+            values["WIFI_PASSWORD"] = required("WIFI_PASSWORD")
+    for key in ("DEVICE_ID", "MQTT_HOST",
                 "MQTT_USERNAME", "MQTT_PASSWORD", "WEB_BASE_URL",
                 "FIRMWARE_DEVICE_API_KEY", "UPLOAD_HOST"):
         values[key] = required(key)
