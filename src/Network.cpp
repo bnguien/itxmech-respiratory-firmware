@@ -1,5 +1,6 @@
 #include "Network.h"
 #include "Protocol.h"
+
 #include <BuildConfig.h>
 #include <WiFi.h>
 #include <time.h>
@@ -8,23 +9,91 @@
 #include <ctype.h>
 
 namespace {
+
 std::atomic<bool> ntpSynced{false};
 
 void onNtpSync(struct timeval *) {
   ntpSynced.store(true);
 }
+
+// Wi-Fi disconnect reason codes.
+// These values come from ESP-IDF Wi-Fi reason definitions.
+const char* wifiReasonText(uint8_t reason) {
+  switch (reason) {
+    case 2:
+      return "AUTH_EXPIRE";
+    case 3:
+      return "AUTH_LEAVE";
+    case 4:
+      return "ASSOC_EXPIRE";
+    case 5:
+      return "ASSOC_TOOMANY";
+    case 15:
+      return "4WAY_HANDSHAKE_TIMEOUT";
+    case 201:
+      return "NO_AP_FOUND";
+    case 202:
+      return "AUTH_FAIL";
+    case 203:
+      return "ASSOC_FAIL";
+    case 204:
+      return "HANDSHAKE_TIMEOUT";
+    default:
+      return "OTHER";
+  }
 }
+
+}  // namespace
 
 // ============================================================
 // Wi-Fi Manager
 // ============================================================
 
 void WiFiManager::begin() {
-  settings.begin("wifi_setup", false);
+  // Register events before starting Wi-Fi.
+  // Do not print Wi-Fi passwords.
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+      case ARDUINO_EVENT_WIFI_STA_START:
+        Serial.println("[WIFI DEBUG] STA started");
+        break;
 
+      case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+        Serial.println(
+            "[WIFI DEBUG] Associated with access point");
+        break;
+
+      case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        Serial.printf(
+            "[WIFI DEBUG] Got IP: %s\n",
+            WiFi.localIP().toString().c_str());
+        break;
+
+      case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+        uint8_t reason =
+            info.wifi_sta_disconnected.reason;
+
+        Serial.printf(
+            "[WIFI DEBUG] Disconnected, reason=%u (%s)\n",
+            unsigned(reason),
+            wifiReasonText(reason));
+        break;
+      }
+
+      default:
+        break;
+    }
+  });
+
+  if (!settings.begin("wifi_setup", false)) {
+    Serial.println("[SETUP] Failed to open NVS namespace");
+  }
+
+  // Preserve existing build-time credentials.
   ssid = settings.getString("ssid", WIFI_SSID);
   password = settings.getString("password", WIFI_PASSWORD);
 
+  // Prefer saved credentials if available.
   JsonDocument credentials;
   String saved = settings.getString("credentials", "");
 
@@ -32,8 +101,16 @@ void WiFiManager::begin() {
       !deserializeJson(credentials, saved) &&
       credentials["ssid"].is<String>() &&
       credentials["password"].is<String>()) {
+
     ssid = credentials["ssid"].as<String>();
     password = credentials["password"].as<String>();
+
+    Serial.println("[WIFI] Loaded saved credentials");
+
+  } else if (ssid.length()) {
+    Serial.println("[WIFI] Using configured credentials");
+  } else {
+    Serial.println("[WIFI] No saved credentials");
   }
 
   WiFi.persistent(false);
@@ -41,23 +118,30 @@ void WiFiManager::begin() {
   WiFi.setAutoReconnect(true);
 
   if (ssid.length()) {
-    WiFi.begin(ssid.c_str(), password.c_str());
+    Serial.println("[WIFI] Connecting to configured network");
+
+    WiFi.begin(
+        ssid.c_str(),
+        password.c_str());
   }
 
   lastAttempt = millis();
   disconnectedSince = lastAttempt;
 
   ntpSynced.store(false);
+  wasConnected = false;
+  wasSynced = false;
 
   configTime(
-      0, 0,
+      0,
+      0,
       "pool.ntp.org",
       "time.cloudflare.com");
 
   sntp_set_time_sync_notification_cb(onNtpSync);
 
   Serial.println(
-      "[WIFI] connecting; waiting for UTC time before TLS");
+      "[WIFI] Waiting for connection and UTC time");
 
   if (!ssid.length()) {
     startPortal();
@@ -65,7 +149,7 @@ void WiFiManager::begin() {
 }
 
 // ============================================================
-// HTTP helpers
+// HTTP Helpers
 // ============================================================
 
 void WiFiManager::redirectToPortal() {
@@ -79,11 +163,12 @@ void WiFiManager::redirectToPortal() {
 // ============================================================
 
 void WiFiManager::showPortal() {
+  // Accept requests only from the setup AP interface.
   if (portal.client().localIP() != WiFi.softAPIP()) {
     portal.send(
         403,
         "text/plain",
-        "Connect to device setup Wi-Fi first");
+        "Connect to RespiCare Setup Wi-Fi first");
     return;
   }
 
@@ -97,7 +182,10 @@ void WiFiManager::showPortal() {
       "<meta charset='utf-8'>"
       "<meta name='viewport' "
       "content='width=device-width,initial-scale=1'>"
+      "<meta http-equiv='Cache-Control' "
+      "content='no-store'>"
       "<title>RespiCare Wi-Fi Setup</title>"
+
       "<style>"
       "*{box-sizing:border-box}"
       "body{font:16px Arial,sans-serif;"
@@ -113,8 +201,9 @@ void WiFiManager::showPortal() {
       "border:1px solid #cbd5e1;border-radius:8px;"
       "font-size:16px}"
       "button{width:100%;padding:13px;margin-top:22px;"
-      "background:#2563eb;color:white;border:0;"
+      "background:#2563eb;color:#fff;border:0;"
       "border-radius:8px;font-size:16px;cursor:pointer}"
+      "button:disabled{opacity:.6}"
       ".status{padding:14px;margin:20px 0;"
       "border-radius:8px;background:#eff6ff;"
       "color:#1e40af;line-height:1.6}"
@@ -129,18 +218,20 @@ void WiFiManager::showPortal() {
       ".hint{font-size:13px;color:#64748b}"
       "</style>"
       "</head>"
+
       "<body><div class='card'>"
       "<h1>RespiCare Wi-Fi Setup</h1>"
       "<p>Ket noi thiet bi voi mang Wi-Fi 2.4 GHz.</p>");
 
-  // portalMessage contains firmware-controlled messages only.
-  // Credentials are never echoed to the browser.
+  // All portal messages are generated by firmware.
+  // No user-supplied SSID/password is echoed here.
   html += "<div class='status";
 
   if (success) {
     html += " success";
   } else if (!busy &&
-             portalMessage.indexOf("thất bại") >= 0) {
+             (portalMessage.indexOf("thất bại") >= 0 ||
+              portalMessage.indexOf("lưu thất bại") >= 0)) {
     html += " error";
   }
 
@@ -154,41 +245,60 @@ void WiFiManager::showPortal() {
         "<p style='text-align:center'>"
         "Dang thu ket noi Wi-Fi...</p>"
         "<p class='hint'>"
-        "Qua trinh co the mat toi da 30 giay."
+        "Thoi gian ket noi toi da 30 giay."
         "</p>"
+
         "<script>"
         "setTimeout(function(){"
         "window.location.replace('/');"
         "},3000);"
         "</script>");
+
   } else if (success) {
     html += F(
         "<h3>Da ket noi thanh cong!</h3>"
         "<p>Thong tin Wi-Fi da duoc luu.</p>"
-        "<p>Thiet bi se tu dong dong mang Setup.</p>"
+        "<p>Thiet bi se dong Wi-Fi Setup sau vai giay.</p>"
         "<p class='hint'>"
-        "Hay ket noi lai Internet va mo web RespiCare."
+        "Ket noi lai Internet va mo web RespiCare."
         "</p>");
+
   } else {
     html += F(
-        "<form method='POST' action='/configure'>"
+        "<form id='wifi-form' "
+        "method='POST' action='/configure'>"
+
         "<label for='ssid'>Ten Wi-Fi (SSID)</label>"
-        "<input id='ssid' name='ssid' maxlength='32'"
-        " required autocomplete='off'>"
+        "<input id='ssid' name='ssid' "
+        "maxlength='32' required autocomplete='off'>"
+
         "<label for='password'>Mat khau Wi-Fi</label>"
-        "<input id='password' name='password'"
-        " type='password' maxlength='64'"
-        " autocomplete='off'>"
-        "<button type='submit'>Ket noi</button>"
+        "<input id='password' name='password' "
+        "type='password' maxlength='64' "
+        "autocomplete='off'>"
+
+        "<button id='submit-btn' type='submit'>"
+        "Ket noi"
+        "</button>"
         "</form>"
+
         "<p class='hint'>"
-        "Nhap Wi-Fi nha ban, khong phai RespiCare-Setup."
-        "</p>");
+        "Nhap Wi-Fi nha ban, "
+        "khong phai mang RespiCare-Setup."
+        "</p>"
+
+        "<script>"
+        "document.getElementById('wifi-form')"
+        ".addEventListener('submit',function(){"
+        "document.getElementById('submit-btn').disabled=true;"
+        "});"
+        "</script>");
   }
 
   html += F("</div></body></html>");
 
   portal.sendHeader("Cache-Control", "no-store");
+
   portal.send(
       200,
       "text/html; charset=utf-8",
@@ -218,7 +328,10 @@ void WiFiManager::startPortal() {
         (unsigned long)esp_random());
 
     apPassword = generated;
-    settings.putString("ap_password", apPassword);
+
+    settings.putString(
+        "ap_password",
+        apPassword);
   }
 
   String apName =
@@ -245,26 +358,40 @@ void WiFiManager::startPortal() {
 
   portalMessage = "Nhập thông tin Wi-Fi mới.";
 
+  // ----------------------------------------------------------
+  // Main page
+  // ----------------------------------------------------------
+
   portal.on("/", HTTP_GET, [this]() {
     showPortal();
   });
 
-  // Avoid browser GET requests returning handler-not-found.
+  // ----------------------------------------------------------
+  // Configure GET
+  // ----------------------------------------------------------
+
   portal.on("/configure", HTTP_GET, [this]() {
     redirectToPortal();
   });
+
+  // ----------------------------------------------------------
+  // Configure POST
+  // ----------------------------------------------------------
 
   portal.on("/configure", HTTP_POST, [this]() {
     if (portal.client().localIP() != WiFi.softAPIP()) {
       portal.send(
           403,
           "text/plain",
-          "Connect to device setup Wi-Fi first");
+          "Connect to device Setup Wi-Fi first");
       return;
     }
 
-    // Duplicate POSTs redirect to the status page.
+    // Do not start multiple connections simultaneously.
     if (testing || connectPending || closePortalAt) {
+      Serial.println(
+          "[SETUP] Duplicate connection request ignored");
+
       redirectToPortal();
       return;
     }
@@ -303,37 +430,91 @@ void WiFiManager::startPortal() {
     pendingPassword = newPassword;
 
     connectPending = true;
+
     portalMessage =
         "Đang thử kết nối. Chưa ghi đè cấu hình cũ.";
 
-    // Never log credentials.
     Serial.printf(
         "[SETUP] Connection request accepted "
         "(SSID length=%u)\n",
         unsigned(newSsid.length()));
 
-    // POST -> 303 -> GET
     redirectToPortal();
   });
 
+  // ----------------------------------------------------------
+  // Captive Portal Detection
+  // ----------------------------------------------------------
+
+  portal.on("/generate_204", HTTP_GET, [this]() {
+    redirectToPortal();
+  });
+
+  portal.on("/gen_204", HTTP_GET, [this]() {
+    redirectToPortal();
+  });
+
+  portal.on("/hotspot-detect.html", HTTP_GET, [this]() {
+    redirectToPortal();
+  });
+
+  portal.on("/library/test/success.html", HTTP_GET,
+      [this]() {
+        redirectToPortal();
+      });
+
+  portal.on("/connecttest.txt", HTTP_GET, [this]() {
+    redirectToPortal();
+  });
+
+  portal.on("/ncsi.txt", HTTP_GET, [this]() {
+    redirectToPortal();
+  });
+
+  portal.on("/fwlink", HTTP_GET, [this]() {
+    redirectToPortal();
+  });
+
+  // ----------------------------------------------------------
+  // Not Found Handler
+  // ----------------------------------------------------------
+
   portal.onNotFound([this]() {
+    Serial.printf(
+        "[HTTP] Unmatched request: %s, method=%d\n",
+        portal.uri().c_str(),
+        int(portal.method()));
+
     portal.sendHeader(
         "Location",
         "http://192.168.4.1/",
         true);
+
+    portal.sendHeader(
+        "Cache-Control",
+        "no-store");
+
     portal.send(302, "text/plain", "");
   });
 
-  dns.start(53, "*", WiFi.softAPIP());
+  dns.start(
+      53,
+      "*",
+      WiFi.softAPIP());
 
   portal.begin();
   portalActive = true;
 
   Serial.printf(
-      "[SETUP] SSID: %s | Setup password: %s | "
-      "http://192.168.4.1\n",
-      apName.c_str(),
+      "[SETUP] SSID: %s\n",
+      apName.c_str());
+
+  Serial.printf(
+      "[SETUP] Setup password: %s\n",
       apPassword.c_str());
+
+  Serial.println(
+      "[SETUP] URL: http://192.168.4.1/");
 }
 
 // ============================================================
@@ -349,6 +530,8 @@ void WiFiManager::stopPortal() {
 
   portalActive = false;
   closePortalAt = 0;
+  testing = false;
+  connectPending = false;
 
   Serial.println("[SETUP] Portal closed");
 }
@@ -360,10 +543,18 @@ void WiFiManager::stopPortal() {
 bool WiFiManager::tick() {
   uint32_t now = millis();
 
+  // ----------------------------------------------------------
+  // Handle HTTP/DNS
+  // ----------------------------------------------------------
+
   if (portalActive) {
     dns.processNextRequest();
     portal.handleClient();
   }
+
+  // ----------------------------------------------------------
+  // New Wi-Fi connection request
+  // ----------------------------------------------------------
 
   if (connectPending) {
     connectPending = false;
@@ -371,32 +562,66 @@ bool WiFiManager::tick() {
     testStarted = now;
 
     Serial.println(
-        "[SETUP] Trying new Wi-Fi credentials");
+        "[SETUP] Starting Wi-Fi connection test");
 
+    Serial.printf(
+        "[SETUP] Target SSID length=%u\n",
+        unsigned(pendingSsid.length()));
+
+    // Disable automatic reconnect while testing.
+    // This avoids competing reconnect attempts.
+    WiFi.setAutoReconnect(false);
+
+    // Disconnect STA without disabling the AP.
     WiFi.disconnect(false, false);
-    WiFi.begin(
-        pendingSsid.c_str(),
-        pendingPassword.c_str());
+
+    // Ensure AP + STA is enabled.
+    WiFi.mode(WIFI_AP_STA);
+
+    wl_status_t startStatus =
+        WiFi.begin(
+            pendingSsid.c_str(),
+            pendingPassword.c_str());
+
+    Serial.printf(
+        "[SETUP] WiFi.begin status=%d\n",
+        int(startStatus));
+
+    Serial.println(
+        "[SETUP] Waiting up to 30 seconds");
   }
 
   bool connected =
       WiFi.status() == WL_CONNECTED;
 
+  // ----------------------------------------------------------
+  // Connection test succeeded
+  // ----------------------------------------------------------
+
   if (testing &&
       connected &&
       WiFi.SSID() == pendingSsid) {
 
-    // Store SSID and password together in NVS.
+    Serial.println(
+        "[SETUP] Wi-Fi connection successful");
+
+    Serial.printf(
+        "[SETUP] Assigned IP: %s\n",
+        WiFi.localIP().toString().c_str());
+
+    // Save credentials in a single NVS entry.
     JsonDocument credentials;
+
     credentials["ssid"] = pendingSsid;
     credentials["password"] = pendingPassword;
 
     String encoded;
     serializeJson(credentials, encoded);
 
-    if (settings.putString(
-            "credentials", encoded) > 0) {
+    size_t written =
+        settings.putString("credentials", encoded);
 
+    if (written > 0) {
       ssid = pendingSsid;
       password = pendingPassword;
 
@@ -405,9 +630,11 @@ bool WiFiManager::tick() {
 
       closePortalAt = now + 10000;
 
-      Serial.printf(
-          "[SETUP] Wi-Fi connected and saved; IP=%s\n",
-          WiFi.localIP().toString().c_str());
+      Serial.println(
+          "[SETUP] Credentials saved successfully");
+
+      Serial.println(
+          "[SETUP] Portal will close in 10 seconds");
 
     } else {
       portalMessage =
@@ -415,24 +642,43 @@ bool WiFiManager::tick() {
           "Vui lòng thử lại.";
 
       Serial.println(
-          "[SETUP] NVS save failed");
+          "[SETUP] ERROR: NVS save failed");
 
-      // Restore old credentials if persistence fails.
+      // Restore old configuration.
       WiFi.disconnect(false, false);
+
       if (ssid.length()) {
-        WiFi.begin(ssid.c_str(), password.c_str());
+        WiFi.begin(
+            ssid.c_str(),
+            password.c_str());
       }
+
       connected = false;
       lastAttempt = now;
+      disconnectedSince = now;
     }
 
     pendingPassword = "";
     pendingSsid = "";
     testing = false;
 
+    WiFi.setAutoReconnect(true);
+
+  // ----------------------------------------------------------
+  // Connection test timeout
+  // ----------------------------------------------------------
+
   } else if (
       testing &&
       now - testStarted >= 30000) {
+
+    Serial.printf(
+        "[SETUP] Wi-Fi connection timeout, status=%d\n",
+        int(WiFi.status()));
+
+    Serial.println(
+        "[SETUP] Check Wi-Fi 2.4 GHz, password, "
+        "signal and router security");
 
     testing = false;
 
@@ -444,23 +690,40 @@ bool WiFiManager::tick() {
         "Cấu hình cũ vẫn được giữ. "
         "Vui lòng thử lại.";
 
-    Serial.printf(
-        "[SETUP] Wi-Fi connection timeout, status=%d\n",
-        int(WiFi.status()));
-
+    // Stop the failed connection attempt.
     WiFi.disconnect(false, false);
 
+    // Restore previous credentials, if any.
     if (ssid.length()) {
-      WiFi.begin(ssid.c_str(), password.c_str());
+      Serial.println(
+          "[SETUP] Restoring previous Wi-Fi");
+
+      WiFi.begin(
+          ssid.c_str(),
+          password.c_str());
+    } else {
+      Serial.println(
+          "[SETUP] No previous Wi-Fi to restore");
     }
 
+    WiFi.setAutoReconnect(true);
+
     lastAttempt = now;
+    disconnectedSince = now;
     connected = false;
   }
+
+  // ----------------------------------------------------------
+  // Track network connection
+  // ----------------------------------------------------------
 
   if (connected) {
     disconnectedSince = now;
   }
+
+  // ----------------------------------------------------------
+  // Start portal after 60 seconds offline
+  // ----------------------------------------------------------
 
   if (!connected &&
       !testing &&
@@ -468,21 +731,30 @@ bool WiFiManager::tick() {
     startPortal();
   }
 
+  // ----------------------------------------------------------
+  // Close portal only after successful setup
+  // ----------------------------------------------------------
+
   if (portalActive &&
       connected &&
       !testing &&
       closePortalAt &&
       int32_t(now - closePortalAt) >= 0) {
+
+    Serial.println(
+        "[SETUP] New Wi-Fi active, closing portal");
+
     stopPortal();
   }
 
-  if (portalActive &&
-      connected &&
-      !testing &&
-      !closePortalAt &&
-      WiFi.SSID() == ssid) {
-    closePortalAt = now + 10000;
-  }
+  // Important:
+  // Do not automatically close the portal just because
+  // the device reconnected to its PREVIOUS network.
+  // A failed setup must remain available for retry.
+
+  // ----------------------------------------------------------
+  // Connection logs
+  // ----------------------------------------------------------
 
   if (connected && !wasConnected) {
     Serial.println("[WIFI] connected");
@@ -493,18 +765,32 @@ bool WiFiManager::tick() {
     }
   }
 
+  if (!connected && wasConnected) {
+    Serial.println("[WIFI] connection lost");
+  }
+
   wasConnected = connected;
+
+  // ----------------------------------------------------------
+  // Reconnect previously configured Wi-Fi
+  // ----------------------------------------------------------
 
   if (!connected &&
       !testing &&
+      !connectPending &&
       ssid.length() &&
-      millis() - lastAttempt >= 15000) {
+      now - lastAttempt >= 15000) {
 
-    lastAttempt = millis();
+    lastAttempt = now;
 
     Serial.println("[WIFI] reconnecting");
+
     WiFi.reconnect();
   }
+
+  // ----------------------------------------------------------
+  // NTP
+  // ----------------------------------------------------------
 
   if (ready() && !wasSynced) {
     wasSynced = true;
@@ -514,8 +800,16 @@ bool WiFiManager::tick() {
         utcNow().c_str());
   }
 
+  if (!connected) {
+    wasSynced = false;
+  }
+
   return ready();
 }
+
+// ============================================================
+// Network Ready
+// ============================================================
 
 bool WiFiManager::ready() const {
   return WiFi.status() == WL_CONNECTED &&
@@ -524,7 +818,7 @@ bool WiFiManager::ready() const {
 }
 
 // ============================================================
-// MQTT Connection - Unchanged
+// MQTT Connection - Preserved
 // ============================================================
 
 String MqttConnection::topic(
