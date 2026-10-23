@@ -26,7 +26,7 @@ maintenance = os.environ.get("MAINTENANCE_VISIT_ID", "")
 debug = os.environ.get("AUDIO_SERIAL_DEBUG", "0") == "1"
 if maintenance:
     action = os.environ.get("MAINTENANCE_CONFIRM")
-    if action not in ("DISCARD_FAILED_WAV", "RECOVER_FAILED_UPLOAD"):
+    if action not in ("DISCARD_FAILED_WAV", "DISCARD_STUCK_UPLOAD", "RECOVER_FAILED_UPLOAD"):
         raise RuntimeError("MAINTENANCE_CONFIRM must explicitly select discard or recovery")
     if not re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", maintenance):
         raise RuntimeError("MAINTENANCE_VISIT_ID must be a lowercase UUID")
@@ -41,6 +41,7 @@ values = {"AUDIO_SERIAL_DEBUG": int(debug)}
 if maintenance:
     values["MAINTENANCE_VISIT_ID"] = maintenance
     values["MAINTENANCE_RECOVER"] = int(action == "RECOVER_FAILED_UPLOAD")
+    values["MAINTENANCE_DISCARD_STUCK_UPLOAD"] = int(action == "DISCARD_STUCK_UPLOAD")
     if action == "RECOVER_FAILED_UPLOAD":
         values["RECORD_SECONDS"] = int(os.environ.get("RECORD_SECONDS", "20"))
         if not 1 <= values["RECORD_SECONDS"] <= 1638:

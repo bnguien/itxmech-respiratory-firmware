@@ -101,6 +101,17 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "MAINTENANCE_CONFIRM"):
             self.run_hook({"MAINTENANCE_VISIT_ID": "ad2d6b03-b921-4094-b584-d249426a0279"})
 
+    def test_stuck_upload_discard_requires_explicit_mode_and_visit(self):
+        self.run_hook({
+            "MAINTENANCE_VISIT_ID": "66a61776-bf13-46b5-8dcb-3ac1927a936d",
+            "MAINTENANCE_CONFIRM": "DISCARD_STUCK_UPLOAD",
+        })
+        header = (self.root / "include/BuildConfig.h").read_text()
+        self.assertIn('#define MAINTENANCE_DISCARD_STUCK_UPLOAD 1', header)
+        self.assertIn('#define MAINTENANCE_RECOVER 0', header)
+        self.assertNotIn('WIFI_PASSWORD', header)
+        self.assertEqual(self.env.filter, ["+<code_esp.ino.cpp>", "+<src/Maintenance.cpp>"])
+
     def test_maintenance_excludes_production_and_secrets(self):
         self.run_hook({
             "MAINTENANCE_VISIT_ID": "ad2d6b03-b921-4094-b584-d249426a0279",

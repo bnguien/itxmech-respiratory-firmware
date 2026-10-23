@@ -179,7 +179,32 @@ checkpoint` and **no** `[SERVICE]` output. Then create an entirely **new**
 in-progress backend visit and publish a new `ASSIGN_VISIT` with a new UUID
 `messageId`. Never reuse the discarded visit ID (the dedup ledger retains it).
 
-## 8. Recover a WAV after a failed Storage TLS PUT (do not re-record)
+## 8. One-time discard when upload is stuck in `uploading`
+
+If the backend operator has verified that the *specific visit* has no recording
+to preserve and approved permanently discarding its local WAV, use the dedicated
+`DISCARD_STUCK_UPLOAD` mode. It accepts **only** a matching lowercase visit UUID
+and a stored job with `phase=uploading`. It does not clear Wi-Fi NVS (`wifi_setup`),
+the accepted-message ledger, or unrelated storage. Do not use `erase_flash` or
+`uploadfs`. Confirm the actual board and COM port, then stop the serial monitor.
+
+```powershell
+$env:MAINTENANCE_VISIT_ID = '<ACTUAL_STUCK_VISIT_UUID>'
+$env:MAINTENANCE_CONFIRM = 'DISCARD_STUCK_UPLOAD'
+pio run -e esp32dev -t clean
+pio run -e esp32dev -t upload --upload-port COM11
+pio device monitor --port COM11 --baud 921600
+```
+
+Proceed only if the serial output shows the expected visit UUID,
+`phase=uploading`, followed by `[SERVICE] DONE: failed WAV/job removed`.
+`STOP` means nothing was removed: do not force it. Exit monitor (`Ctrl+C`),
+remove **both** maintenance environment variables, reload production `.env`,
+clean/build and upload production as shown in section 7. Confirm Wi-Fi/MQTT
+reconnect and **no** `[FLOW] restoring checkpoint` before creating a new visit.
+If the stored job is `error` instead, use `DISCARD_FAILED_WAV` (section 7).
+
+## 9. Recover a WAV after a failed Storage TLS PUT (do not re-record)
 
 Use only when the backend operator confirms the visit is still valid and its
 recording is **not uploaded** (waiting/failed). Do not use this mode if complete

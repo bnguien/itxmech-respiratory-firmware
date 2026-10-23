@@ -14,6 +14,7 @@
 #endif
 
 // One-shot local service: no Wi-Fi, MQTT, recording or filesystem formatting.
+// Never opens the separate wifi_setup Preferences namespace.
 void firmwareSetup() {
   Serial.begin(921600);
   delay(2000);
@@ -46,7 +47,11 @@ void firmwareSetup() {
   String phase = job["phase"].as<String>();
   Serial.printf("[SERVICE] checkpoint visit=%s phase=%s\n",
                 visit.c_str(), phase.c_str());
-  if (visit != MAINTENANCE_VISIT_ID || phase != "error") {
+  bool allowedPhase = phase == "error";
+#if MAINTENANCE_DISCARD_STUCK_UPLOAD
+  allowedPhase = phase == "uploading";
+#endif
+  if (visit != MAINTENANCE_VISIT_ID || !allowedPhase) {
     Serial.println("[SERVICE] STOP: visit/phase mismatch; nothing changed");
     prefs.end();
     return;
