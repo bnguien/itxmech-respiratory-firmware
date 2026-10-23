@@ -505,6 +505,12 @@ void WiFiManager::startPortal() {
   portal.begin();
   portalActive = true;
 
+  // STA scans for the missing network hop channels and make the
+  // setup AP disappear from phones. Pause them while the portal is open.
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  lastAttempt = millis();
+
   Serial.printf(
       "[SETUP] SSID: %s\n",
       apName.c_str());
@@ -532,6 +538,8 @@ void WiFiManager::stopPortal() {
   closePortalAt = 0;
   testing = false;
   connectPending = false;
+
+  WiFi.setAutoReconnect(true);
 
   Serial.println("[SETUP] Portal closed");
 }
@@ -706,7 +714,8 @@ bool WiFiManager::tick() {
           "[SETUP] No previous Wi-Fi to restore");
     }
 
-    WiFi.setAutoReconnect(true);
+    // Keep the portal visible for the next attempt.
+    WiFi.setAutoReconnect(false);
 
     lastAttempt = now;
     disconnectedSince = now;
@@ -775,11 +784,14 @@ bool WiFiManager::tick() {
   // Reconnect previously configured Wi-Fi
   // ----------------------------------------------------------
 
+  // While the portal is open, retry the saved network rarely and never
+  // while a phone is joined: each retry scans channels and hides the AP.
   if (!connected &&
       !testing &&
       !connectPending &&
       ssid.length() &&
-      now - lastAttempt >= 15000) {
+      (!portalActive || WiFi.softAPgetStationNum() == 0) &&
+      now - lastAttempt >= (portalActive ? 120000UL : 15000UL)) {
 
     lastAttempt = now;
 
